@@ -1,4 +1,4 @@
-// Copyright 2020 Confluent Inc.
+﻿// Copyright 2020 Confluent Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,5 +23,8 @@ namespace Confluent.SchemaRegistry.Serdes
     ///     <see cref="Confluent.SchemaRegistry.Serdes.JsonDeserializer{T}" />
     ///     configuration properties.
     /// </summary>
-    public class JsonDeserializerConfig : Config {}
+    public class JsonDeserializerConfig : Config
+    {
+        public NewtonsoftJsonAdapter JsonSerializer { get; set; }
+    }
 }

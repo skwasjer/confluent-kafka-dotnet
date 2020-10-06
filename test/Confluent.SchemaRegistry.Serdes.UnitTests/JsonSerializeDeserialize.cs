@@ -1,4 +1,4 @@
-// Copyright 2020 Confluent Inc.
+﻿// Copyright 2020 Confluent Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -43,7 +43,7 @@ namespace Confluent.SchemaRegistry.Serdes.UnitTests
         {
             public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
             {
-                var newValue = ((UInt32Value) value).Value * 2;
+                var newValue = ((UInt32Value)value).Value * 2;
                 writer.WriteStartObject();
                 writer.WritePropertyName("Value");
                 writer.WriteValue(newValue);
@@ -95,7 +95,7 @@ namespace Confluent.SchemaRegistry.Serdes.UnitTests
             schemaRegistryMock.Setup(x => x.GetSchemaAsync(It.IsAny<int>(), It.IsAny<string>())).ReturnsAsync(
                 (int id, string format) => new Schema(store.Where(x => x.Value == id).First().Key, null, SchemaType.Protobuf)
             );
-            schemaRegistryClient = schemaRegistryMock.Object;   
+            schemaRegistryClient = schemaRegistryMock.Object;
         }
 
         [Fact]
@@ -111,13 +111,13 @@ namespace Confluent.SchemaRegistry.Serdes.UnitTests
 
 
         [Fact]
-        public void UInt32SerDe()
+        public async Task UInt32SerDe()
         {
             var jsonSerializer = new JsonSerializer<UInt32Value>(schemaRegistryClient);
             var jsonDeserializer = new JsonDeserializer<UInt32Value>();
 
             var v = new UInt32Value { Value = 1234 };
-            var bytes = jsonSerializer.SerializeAsync(v, new SerializationContext(MessageComponentType.Value, testTopic)).Result;
+            var bytes = await jsonSerializer.SerializeAsync(v, new SerializationContext(MessageComponentType.Value, testTopic));
             Assert.Equal(v.Value, jsonDeserializer.DeserializeAsync(bytes, false, new SerializationContext(MessageComponentType.Value, testTopic)).Result.Value);
         }
 
@@ -126,20 +126,33 @@ namespace Confluent.SchemaRegistry.Serdes.UnitTests
         {
             const int value = 1234;
             var expectedJson = $"{{\"Value\":{value * 2}}}";
+            var serializerSettings = new JsonSerializerSettings
+            {
+                Converters = new List<JsonConverter>
+                {
+                    new UInt32ValueMultiplyConverter()
+                },
+                ContractResolver = new DefaultContractResolver()
+            };
             var jsonSchemaGeneratorSettings = new JsonSchemaGeneratorSettings
             {
-                SerializerSettings = new JsonSerializerSettings
-                {
-                    Converters = new List<JsonConverter>
-                    {
-                        new UInt32ValueMultiplyConverter()
-                    },
-                    ContractResolver = new DefaultContractResolver()
-                }
+                SerializerSettings = serializerSettings
             };
 
-            var jsonSerializer = new JsonSerializer<UInt32Value>(schemaRegistryClient, jsonSchemaGeneratorSettings: jsonSchemaGeneratorSettings);
-            var jsonDeserializer = new JsonDeserializer<UInt32Value>(jsonSchemaGeneratorSettings: jsonSchemaGeneratorSettings);
+            var jsonSerializer = new JsonSerializer<UInt32Value>(
+                schemaRegistryClient,
+                config: new JsonSerializerConfig
+                {
+                    JsonSerializer = new NewtonsoftJsonAdapter(serializerSettings),
+                    JsonSchemaProvider = new NJsonSchemaProvider(jsonSchemaGeneratorSettings)
+                }
+            );
+            var jsonDeserializer = new JsonDeserializer<UInt32Value>(
+                config: new JsonDeserializerConfig
+                {
+                    JsonSerializer = new NewtonsoftJsonAdapter(serializerSettings)
+                }
+            );
 
             var v = new UInt32Value { Value = value };
             var bytes = await jsonSerializer.SerializeAsync(v, new SerializationContext(MessageComponentType.Value, testTopic));
@@ -162,8 +175,20 @@ namespace Confluent.SchemaRegistry.Serdes.UnitTests
                 DefaultEnumHandling = enumHandling
             };
 
-            var jsonSerializer = new JsonSerializer<EnumObject>(schemaRegistryClient, jsonSchemaGeneratorSettings: jsonSchemaGeneratorSettings);
-            var jsonDeserializer = new JsonDeserializer<EnumObject>(jsonSchemaGeneratorSettings: jsonSchemaGeneratorSettings);
+            var jsonSerializer = new JsonSerializer<EnumObject>(
+                schemaRegistryClient,
+                config: new JsonSerializerConfig
+                {
+                    JsonSerializer = new NewtonsoftJsonAdapter(jsonSchemaGeneratorSettings.ActualSerializerSettings),
+                    JsonSchemaProvider = new NJsonSchemaProvider(jsonSchemaGeneratorSettings)
+                }
+            );
+            var jsonDeserializer = new JsonDeserializer<EnumObject>(
+                config: new JsonDeserializerConfig
+                {
+                    JsonSerializer = new NewtonsoftJsonAdapter(jsonSchemaGeneratorSettings.ActualSerializerSettings)
+                }
+            );
 
             var v = new EnumObject { Value = value };
             var bytes = await jsonSerializer.SerializeAsync(v, new SerializationContext(MessageComponentType.Value, testTopic));

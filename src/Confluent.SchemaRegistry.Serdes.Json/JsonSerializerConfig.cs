@@ -1,4 +1,4 @@
-// Copyright 2020 Confluent Inc.
+﻿// Copyright 2020 Confluent Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,7 +18,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Confluent.Kafka;
-
 
 namespace Confluent.SchemaRegistry.Serdes
 {
@@ -101,7 +100,7 @@ namespace Confluent.SchemaRegistry.Serdes
             get { return GetBool(PropertyNames.AutoRegisterSchemas); }
             set { SetObject(PropertyNames.AutoRegisterSchemas, value); }
         }
-        
+
 
         /// <summary>
         ///     Subject name strategy.
@@ -131,5 +130,14 @@ namespace Confluent.SchemaRegistry.Serdes
             }
         }
 
+        /// <summary>
+        /// 
+        /// </summary>
+        public IJsonSchemaProvider JsonSchemaProvider { get; set; }
+
+        /// <summary>
+        /// Gets or sets the adapter to use for JSON serialization.
+        /// </summary>
+        public IJsonSerializerAdapter JsonSerializer { get; set; }
     }
 }

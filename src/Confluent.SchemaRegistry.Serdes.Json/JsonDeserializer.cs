@@ -1,4 +1,4 @@
-// Copyright 2020 Confluent Inc.
+﻿// Copyright 2020 Confluent Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,14 +15,11 @@
 // Refer to LICENSE for more information.
 
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Confluent.Kafka;
-using NJsonSchema.Generation;
-
 
 namespace Confluent.SchemaRegistry.Serdes
 {
@@ -48,9 +45,9 @@ namespace Confluent.SchemaRegistry.Serdes
     /// </remarks>
     public class JsonDeserializer<T> : IAsyncDeserializer<T> where T : class, new()
     {
-        private readonly int headerSize =  sizeof(int) + sizeof(byte);
-        
-        private readonly JsonSchemaGeneratorSettings jsonSchemaGeneratorSettings;
+        private readonly int headerSize = sizeof(int) + sizeof(byte);
+
+        private readonly IJsonSerializerAdapter jsonSerializer;
 
         /// <summary>
         ///     Initialize a new JsonDeserializer instance.
@@ -59,12 +56,10 @@ namespace Confluent.SchemaRegistry.Serdes
         ///     Deserializer configuration properties (refer to
         ///     <see cref="JsonDeserializerConfig" />).
         /// </param>
-        /// <param name="jsonSchemaGeneratorSettings">
-        ///     JSON schema generator settings.
-        /// </param>
-        public JsonDeserializer(IEnumerable<KeyValuePair<string, string>> config = null, JsonSchemaGeneratorSettings jsonSchemaGeneratorSettings = null)
+        public JsonDeserializer(JsonDeserializerConfig config = null)
         {
-            this.jsonSchemaGeneratorSettings = jsonSchemaGeneratorSettings;
+            // Message deserialization defaults to Newtonsoft.
+            this.jsonSerializer = config?.JsonSerializer ?? new NewtonsoftJsonAdapter();
 
             if (config == null) { return; }
 
@@ -91,9 +86,9 @@ namespace Confluent.SchemaRegistry.Serdes
         ///     A <see cref="System.Threading.Tasks.Task" /> that completes
         ///     with the deserialized value.
         /// </returns>
-        public Task<T> DeserializeAsync(ReadOnlyMemory<byte> data, bool isNull, SerializationContext context)
+        public async Task<T> DeserializeAsync(ReadOnlyMemory<byte> data, bool isNull, SerializationContext context)
         {
-            if (isNull) { return Task.FromResult<T>(null); }
+            if (isNull) { return null; }
 
             try
             {
@@ -115,7 +110,10 @@ namespace Confluent.SchemaRegistry.Serdes
                 using (var stream = new MemoryStream(array, headerSize, array.Length - headerSize))
                 using (var sr = new System.IO.StreamReader(stream, Encoding.UTF8))
                 {
-                    return Task.FromResult(Newtonsoft.Json.JsonConvert.DeserializeObject<T>(sr.ReadToEnd(), this.jsonSchemaGeneratorSettings?.ActualSerializerSettings));
+                    string jsonData = await sr.ReadToEndAsync()
+                        .ConfigureAwait(continueOnCapturedContext: false);
+                    return (T)await this.jsonSerializer.DeserializeAsync(jsonData, typeof(T))
+                        .ConfigureAwait(continueOnCapturedContext: false);
                 }
             }
             catch (AggregateException e)

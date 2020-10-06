@@ -1,4 +1,4 @@
-// Copyright 2020 Confluent Inc.
+﻿// Copyright 2020 Confluent Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,9 +24,6 @@ using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
-using NJsonSchema;
-using NJsonSchema.Generation;
-using NJsonSchema.Validation;
 using Confluent.Kafka;
 
 
@@ -53,7 +50,7 @@ namespace Confluent.SchemaRegistry.Serdes
     ///     integration of System.Text.Json and JSON Schema, so this
     ///     is not yet supported by the serializer.
     /// </remarks>
-    public class JsonSerializer<T> : IAsyncSerializer<T>  where T : new()
+    public class JsonSerializer<T> : IAsyncSerializer<T> where T : new()
     {
         private const int DefaultInitialBufferSize = 1024;
 
@@ -61,13 +58,13 @@ namespace Confluent.SchemaRegistry.Serdes
         private int initialBufferSize = DefaultInitialBufferSize;
         private SubjectNameStrategyDelegate subjectNameStrategy = null;
         private ISchemaRegistryClient schemaRegistryClient;
-        private readonly JsonSchemaGeneratorSettings jsonSchemaGeneratorSettings;
-        
+
         private HashSet<string> subjectsRegistered = new HashSet<string>();
         private SemaphoreSlim serializeMutex = new SemaphoreSlim(1);
         private readonly List<SchemaReference> EmptyReferencesList = new List<SchemaReference>();
 
-        private JsonSchemaValidator validator = new JsonSchemaValidator();
+        private readonly IJsonSchemaProvider schemaProvider;
+        private readonly IJsonSerializerAdapter jsonSerializer;
 
         /// <remarks>
         ///     A given schema is uniquely identified by a schema id, even when
@@ -75,9 +72,8 @@ namespace Confluent.SchemaRegistry.Serdes
         /// </remarks>
         private int? schemaId;
 
-        private JsonSchema schema;
-        private string schemaText;
-        private string schemaFullname;
+        private readonly JsonSchema schema;
+        private readonly JsonSerializerConfig config;
 
         /// <summary>
         ///     Initialize a new instance of the JsonSerializer class.
@@ -85,18 +81,19 @@ namespace Confluent.SchemaRegistry.Serdes
         /// <param name="jsonSchemaGeneratorSettings">
         ///     JSON schema generator settings.
         /// </param>
-        public JsonSerializer(ISchemaRegistryClient schemaRegistryClient, JsonSerializerConfig config = null, JsonSchemaGeneratorSettings jsonSchemaGeneratorSettings = null)
+        public JsonSerializer(ISchemaRegistryClient schemaRegistryClient, JsonSerializerConfig config = null)
         {
             this.schemaRegistryClient = schemaRegistryClient;
-            this.jsonSchemaGeneratorSettings = jsonSchemaGeneratorSettings;
 
-            this.schema = this.jsonSchemaGeneratorSettings == null
-                ? NJsonSchema.JsonSchema.FromType<T>()
-                : NJsonSchema.JsonSchema.FromType<T>(this.jsonSchemaGeneratorSettings);
-            this.schemaFullname = schema.Title;
-            this.schemaText = schema.ToJson();
+            // Schema provider defaults to NJsonSchemaProvider.
+            this.schemaProvider = config?.JsonSchemaProvider ?? new NJsonSchemaProvider();
+            this.schema = this.schemaProvider.GetSchema(typeof(T)) ?? throw new InvalidOperationException($"No schema provided for type '{typeof(T).FullName}'.");
+
+            // Message serialization defaults to Newtonsoft.
+            this.jsonSerializer = config?.JsonSerializer ?? new NewtonsoftJsonAdapter();
 
             if (config == null) { return; }
+            this.config = config;
 
             var nonJsonConfig = config.Where(item => !item.Key.StartsWith("json."));
             if (nonJsonConfig.Count() > 0)
@@ -134,12 +131,13 @@ namespace Confluent.SchemaRegistry.Serdes
         {
             if (value == null) { return null; }
 
-            var serializedString = Newtonsoft.Json.JsonConvert.SerializeObject(value, this.jsonSchemaGeneratorSettings?.ActualSerializerSettings);
-            var validationResult = validator.Validate(serializedString, this.schema);
+            var serializedString = await this.jsonSerializer.SerializeAsync(value);
+            var validationResult = this.schema.Validate(serializedString);
             if (validationResult.Count > 0)
             {
-                throw new InvalidDataException("Schema validation failed for properties: [" + string.Join(", ", validationResult.Select(r => r.Path) + "]"));
+                throw new InvalidDataException("Schema validation failed for properties: [" + string.Join(", ", validationResult.Select(r => r.Path)) + "]");
             }
+
 
             try
             {
@@ -148,19 +146,19 @@ namespace Confluent.SchemaRegistry.Serdes
                 {
                     string subject = this.subjectNameStrategy != null
                         // use the subject name strategy specified in the serializer config if available.
-                        ? this.subjectNameStrategy(context, this.schemaFullname)
+                        ? this.subjectNameStrategy(context, this.schema.FullName)
                         // else fall back to the deprecated config from (or default as currently supplied by) SchemaRegistry.
                         : context.Component == MessageComponentType.Key
-                            ? schemaRegistryClient.ConstructKeySubjectName(context.Topic, this.schemaFullname)
-                            : schemaRegistryClient.ConstructValueSubjectName(context.Topic, this.schemaFullname);
+                            ? schemaRegistryClient.ConstructKeySubjectName(context.Topic, this.schema.FullName)
+                            : schemaRegistryClient.ConstructValueSubjectName(context.Topic, this.schema.FullName);
 
                     if (!subjectsRegistered.Contains(subject))
                     {
                         // first usage: register/get schema to check compatibility
                         schemaId = autoRegisterSchema
-                            ? await schemaRegistryClient.RegisterSchemaAsync(subject, new Schema(this.schemaText, EmptyReferencesList, SchemaType.Json))
+                            ? await schemaRegistryClient.RegisterSchemaAsync(subject, this.schema)
                                 .ConfigureAwait(continueOnCapturedContext: false)
-                            : await schemaRegistryClient.GetSchemaIdAsync(subject, new Schema(this.schemaText, EmptyReferencesList, SchemaType.Json))
+                            : await schemaRegistryClient.GetSchemaIdAsync(subject, this.schema)
                                 .ConfigureAwait(continueOnCapturedContext: false);
 
                         // TODO: It may be better to fail fast if conflicting values for schemaId are seen here.
@@ -172,7 +170,7 @@ namespace Confluent.SchemaRegistry.Serdes
                 {
                     serializeMutex.Release();
                 }
-                
+
                 using (var stream = new MemoryStream(initialBufferSize))
                 using (var writer = new BinaryWriter(stream))
                 {
